@@ -1,0 +1,164 @@
+#settings block
+terraform {
+    required_providers {
+      aws = {
+        source = "hashicorp/aws"
+        version = "~> 4.41.0"
+      }
+    }
+}
+#define the provider
+provider "aws" {
+    access_key = "AKIAUWCCGINJEYAEZU5Q"
+    secret_key = "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"
+    region = "us-east-1"
+}
+resource "aws_vpc" "R-jio" {
+  cidr_block       = "10.1.0.0/16"
+  instance_tenancy = "default"
+  enable_dns_hostnames = "true"
+  tags = {
+    Name = "R-jio"
+  }
+}
+resource "aws_subnet" "publicsubnet" {
+    vpc_id = aws_vpc.R-jio.id
+    depends_on = [aws_vpc.R-jio]
+    count = "${length(var.subnet_cidrs_public)}"
+    cidr_block = "${var.subnet_cidrs_public[count.index]}"
+    availability_zone = "${var.availability_zones[count.index]}"
+    map_public_ip_on_launch = true
+    tags = {
+      Name = "Rpublicsubnet ${count.index + 1}"
+  }
+}
+resource "aws_subnet" "privatesubnet" {
+    vpc_id = aws_vpc.R-jio.id
+    depends_on = [aws_vpc.R-jio]
+    count = "${length(var.subnet_cidrs_private)}"
+    cidr_block = "${var.subnet_cidrs_private[count.index]}"
+    availability_zone = "${var.availability_zones[count.index]}"
+    map_public_ip_on_launch = false
+    tags = {
+      Name = "Rprivatesubnet ${count.index + 1}"
+  }
+}
+#create igw
+resource "aws_internet_gateway" "my_ig" {
+  tags = {
+    Name = "my_igw"
+  }
+  vpc_id     = aws_vpc.R-jio.id
+  depends_on = [aws_vpc.R-jio]
+}
+#create route
+resource "aws_route_table" "Rjio_route_table" {
+  tags = {
+    Name = "Rjio_route_table"
+  }
+  vpc_id = aws_vpc.R-jio.id
+}
+# Associate subnet with routetable
+resource "aws_route_table_association" "route_association" {
+  count = "${length(var.subnet_cidrs_public)}"
+  subnet_id      = "${element(aws_subnet.publicsubnet.*.id, count.index)}"
+  route_table_id = aws_route_table.Rjio_route_table.id
+}
+#internet gateway to routetable
+resource "aws_route" "default_route" {
+  route_table_id         = aws_route_table.Rjio_route_table.id
+  destination_cidr_block = "0.0.0.0/0"
+  gateway_id             = aws_internet_gateway.my_ig.id
+}
+#create route
+resource "aws_route_table" "Rjio_nat_route_table" {
+  tags = {
+    Name = "Rjio_nat_route_table"
+  }
+  vpc_id = aws_vpc.R-jio.id
+}
+# Associate subnet with routetable
+resource "aws_route_table_association" "nat_route_association" {
+  count = "${length(var.subnet_cidrs_private)}"
+  subnet_id      = "${element(aws_subnet.privatesubnet.*.id, count.index)}"
+  route_table_id = aws_route_table.Rjio_nat_route_table.id
+}  
+resource "aws_security_group" "allow_tls" {
+  name        = "allow_tls"
+  description = "Allow TLS inbound traffic"
+  vpc_id      = aws_vpc.R-jio.id
+
+  ingress {
+    description      = "TLS from VPC"
+    from_port        = 0
+    to_port          = 0
+    protocol         = "-1"
+    cidr_blocks      = [aws_vpc.R-jio.cidr_block]
+  }
+
+  egress {
+    from_port        = 0
+    to_port          = 0
+    protocol         = "-1"
+    cidr_blocks      = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "allow_tls"
+  }
+}
+#create an instance
+resource "aws_instance" "web" {
+  ami           = "${lookup(var.ami_ids, "us-east-1")}"
+  instance_type = "t2.micro"
+  tags = {
+    Name = "Webserver ${count.index+1}"
+  }
+  count           = 1
+  key_name        = "sai"
+  subnet_id       = "${element(aws_subnet.publicsubnet.*.id, count.index % length(aws_subnet.publicsubnet.*.id))}"
+  security_groups = [aws_security_group.allow_tls.id]
+#   lifecycle {
+#     prevent_destroy = true
+# }
+}
+#create an instance
+resource "aws_instance" "app" {
+  ami           = "${lookup(var.ami_ids, "us-east-1")}"
+  instance_type = "t2.micro"
+  tags = {
+    Name = "Webserver1 ${count.index+1}"
+  }
+  count           = 2
+  key_name        = "sai"
+  subnet_id       = "${element(aws_subnet.privatesubnet.*.id, count.index % length(aws_subnet.privatesubnet.*.id))}"
+  security_groups = [aws_security_group.allow_tls.id]
+#   lifecycle {
+#     prevent_destroy = true
+# }
+}
+#creating elastic ip
+resource "aws_eip" "EIP" {
+    vpc = true
+    tags = {
+        Name = "EIP"
+    }
+}
+#creating natgateway
+resource "aws_nat_gateway" "natgw" {
+    allocation_id = aws_eip.EIP.id
+    # count = "${length(var.subnet_cidrs_public)}"
+    subnet_id     = "${element(aws_subnet.publicsubnet.*.id, 0)}"
+    tags = {
+        Name = "gw NAT"
+  }
+
+  # To ensure proper ordering, it is recommended to add an explicit dependency
+  # on the Internet Gateway for the VPC.
+  depends_on = [aws_internet_gateway.my_ig]
+}
+resource "aws_route" "private_nat_gateway" {
+  route_table_id         = aws_route_table.Rjio_nat_route_table.id 
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.natgw.id
+}
