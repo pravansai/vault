@@ -1,0 +1,18 @@
+variable "subnet_cidrs_public" {
+  description = "Subnet CIDRs for public subnets (length must match configured availability_zones)"
+  # this could be further simplified / computed using cidrsubnet() etc.
+  # https://www.terraform.io/docs/configuration/interpolation.html#cidrsubnet-iprange-newbits-netnum-
+  default = ["10.1.1.0/24", "10.1.2.0/24", "10.1.3.0/24"]
+  type = list
+}
+# Example of a list variable
+variable availability_zones {
+  default = ["us-east-1a", "us-east-1b", "us-east-1c", "us-east-1e"]
+  type = list
+}
+variable ami_ids {
+  default = {
+    "us-east-1" = "ami-0b0dcb5067f052a63"
+  }
+}
+
